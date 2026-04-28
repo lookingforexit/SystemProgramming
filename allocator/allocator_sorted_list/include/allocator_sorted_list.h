@@ -6,6 +6,7 @@
 #include <allocator_with_fit_mode.h>
 #include <iterator>
 #include <mutex>
+#include <utility>
 
 class allocator_sorted_list final:
     public smart_mem_resource,
@@ -43,6 +44,13 @@ public:
     ~allocator_sorted_list() override;
 
 private:
+
+    struct block_choice
+    {
+        void* block;
+        void* prev;
+        size_t size;
+    };
     
     [[nodiscard]] void *do_allocate_sm(
         size_t size) override;
@@ -68,7 +76,23 @@ private:
 
     [[nodiscard]] auto get_head() const;
 
+    [[nodiscard]] auto get_memory_start() const;
+
+    [[nodiscard]] auto get_memory_end() const;
+
+    static auto get_size_ptr(void* block);
+
+    static auto get_next_ptr(void* block);
+
+    static auto get_block_size(void* block);
+
+    static auto is_block_free(void* block);
+
     void insert_free_block(void* block) const;
+
+    void remove_free_block(void* block, void* prev) const;
+
+    [[nodiscard]] block_choice find_block(size_t needed) const;
 private:
 
     [[nodiscard]] std::vector<allocator_test_utils::block_info> get_blocks_info_inner() const override;
