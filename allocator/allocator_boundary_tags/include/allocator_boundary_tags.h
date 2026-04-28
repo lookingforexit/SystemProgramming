@@ -15,6 +15,12 @@ class allocator_boundary_tags final :
 
 private:
 
+    struct block_choice
+    {
+        void* block;
+        size_t size;
+    };
+
     static constexpr const size_t allocator_metadata_size = sizeof(memory_resource*) + sizeof(allocator_with_fit_mode::fit_mode) +
                                                             sizeof(size_t) + sizeof(std::mutex) + sizeof(void*);
 
@@ -70,6 +76,8 @@ private:
     [[nodiscard]] auto get_full_size() const;
     [[nodiscard]] auto get_mutex() const;
     [[nodiscard]] auto get_head() const;
+    [[nodiscard]] auto get_memory_start() const;
+    [[nodiscard]] auto get_memory_end() const;
 
     static auto get_free_prev_block(void* block);
     static auto get_free_next_block(void* block);
@@ -82,6 +90,7 @@ private:
 
     void insert_free_block(void* block) const;
     void remove_free_block(void* block) const;
+    [[nodiscard]] block_choice find_block(size_t needed) const;
 
     static bool is_block_free(void* block);
 private:
