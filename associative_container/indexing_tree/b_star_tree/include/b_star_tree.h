@@ -15,7 +15,7 @@
 template <typename tkey, typename tvalue, comparator<tkey> compare = std::less<tkey>, std::size_t t = 5>
 class BS_tree final : private compare
 {
-    static_assert(t >= 2, "invalid t for b-star tree");
+    static_assert(t >= 1, "invalid t for b-star tree");
 
 public:
     using tree_data_type = std::pair<tkey, tvalue>;
@@ -23,20 +23,18 @@ public:
     using value_type = tree_data_type_const;
 
 private:
-    static constexpr size_t maximum_keys_in_node = 2 * t + 1;
-    static constexpr size_t minimum_keys_in_node = t;
-    static constexpr size_t maximum_children_in_node = maximum_keys_in_node + 1;
-    static constexpr size_t minimum_children_in_node = minimum_keys_in_node + 1;
+    static constexpr size_t minimum_keys_in_node = 2 * t - 1;
+    static constexpr size_t maximum_keys_in_node = 3 * t - 1;
 
     struct bstree_node
     {
-        std::vector<tree_data_type*> _keys;
+        std::vector<tree_data_type> _keys;
         std::vector<bstree_node*> _pointers;
 
         bstree_node()
         {
-            _keys.reserve(maximum_keys_in_node);
-            _pointers.reserve(maximum_children_in_node);
+            _keys.reserve(maximum_keys_in_node + 1);
+            _pointers.reserve(maximum_keys_in_node + 2);
         }
 
         bool is_leaf() const noexcept
@@ -50,7 +48,7 @@ private:
 
     pp_allocator<value_type> _allocator;
     bstree_node* _root;
-    std::vector<tree_data_type*> _entries;
+    size_t _size;
 
     bool key_less(const tkey& lhs, const tkey& rhs) const
     {
@@ -60,6 +58,17 @@ private:
     bool key_equal(const tkey& lhs, const tkey& rhs) const
     {
         return !key_less(lhs, rhs) && !key_less(rhs, lhs);
+    }
+
+    size_t find_key_index(const bstree_node* node, const tkey& key) const
+    {
+        size_t index = 0;
+        while (index < node->_keys.size() && key_less(node->_keys[index].first, key))
+        {
+            ++index;
+        }
+
+        return index;
     }
 
     static tree_data_type_const& pair_as_value(tree_data_type& value) noexcept
@@ -77,29 +86,11 @@ private:
         return pp_allocator<bstree_node>(_allocator).template new_object<bstree_node>();
     }
 
-    tree_data_type* allocate_entry(const tree_data_type& value)
-    {
-        return pp_allocator<tree_data_type>(_allocator).template new_object<tree_data_type>(value);
-    }
-
-    tree_data_type* allocate_entry(tree_data_type&& value)
-    {
-        return pp_allocator<tree_data_type>(_allocator).template new_object<tree_data_type>(std::move(value));
-    }
-
     void free_node(bstree_node* node) noexcept
     {
         if (node != nullptr)
         {
             pp_allocator<bstree_node>(_allocator).delete_object(node);
-        }
-    }
-
-    void free_entry(tree_data_type* entry) noexcept
-    {
-        if (entry != nullptr)
-        {
-            pp_allocator<tree_data_type>(_allocator).delete_object(entry);
         }
     }
 
@@ -118,183 +109,29 @@ private:
         free_node(node);
     }
 
-    size_t find_index(const tkey& key) const
+    bstree_node* clone_subtree(const bstree_node* node)
     {
-        size_t left = 0;
-        size_t right = _entries.size();
-
-        while (left < right)
+        if (node == nullptr)
         {
-            size_t middle = left + (right - left) / 2;
-            if (key_less(_entries[middle]->first, key))
-            {
-                left = middle + 1;
-            }
-            else
-            {
-                right = middle;
-            }
+            return nullptr;
         }
 
-        return left;
-    }
-
-    tree_data_type* find_entry(const tkey& key) noexcept
-    {
-        size_t index = find_index(key);
-        if (index < _entries.size() && key_equal(_entries[index]->first, key))
-        {
-            return _entries[index];
-        }
-
-        return nullptr;
-    }
-
-    const tree_data_type* find_entry(const tkey& key) const noexcept
-    {
-        size_t index = find_index(key);
-        if (index < _entries.size() && key_equal(_entries[index]->first, key))
-        {
-            return _entries[index];
-        }
-
-        return nullptr;
-    }
-
-    static size_t minimum_items_in_subtree(size_t height) noexcept
-    {
-        if (height == 0)
-        {
-            return minimum_keys_in_node;
-        }
-
-        size_t child_items = minimum_items_in_subtree(height - 1);
-        return minimum_children_in_node * child_items + minimum_keys_in_node;
-    }
-
-    static size_t maximum_items_in_subtree(size_t height) noexcept
-    {
-        if (height == 0)
-        {
-            return maximum_keys_in_node;
-        }
-
-        size_t child_items = maximum_items_in_subtree(height - 1);
-        return maximum_children_in_node * child_items + maximum_keys_in_node;
-    }
-
-    static std::vector<size_t> distribute_items(size_t total_items, size_t bucket_count, size_t minimum_bucket_size, size_t maximum_bucket_size)
-    {
-        std::vector<size_t> sizes(bucket_count, total_items / bucket_count);
-        size_t remainder = total_items % bucket_count;
-        for (size_t i = 0; i < remainder; ++i)
-        {
-            ++sizes[i];
-        }
-
-        for (size_t& size : sizes)
-        {
-            if (size < minimum_bucket_size || size > maximum_bucket_size)
-            {
-                throw std::logic_error("unable to distribute b-star tree items");
-            }
-        }
-
-        return sizes;
-    }
-
-    bstree_node* build_subtree_from_range(size_t begin, size_t end, size_t height)
-    {
-        bstree_node* node = allocate_node();
-
+        bstree_node* clone = allocate_node();
         try
         {
-            if (height == 0)
+            clone->_keys = node->_keys;
+            for (bstree_node* child : node->_pointers)
             {
-                for (size_t i = begin; i < end; ++i)
-                {
-                    node->_keys.push_back(_entries[i]);
-                }
-                return node;
-            }
-
-            size_t total_items = end - begin;
-            size_t child_minimum = minimum_items_in_subtree(height - 1);
-            size_t child_maximum = maximum_items_in_subtree(height - 1);
-
-            size_t child_count = 2;
-            while (child_count <= maximum_children_in_node)
-            {
-                if (total_items < child_count - 1)
-                {
-                    break;
-                }
-
-                size_t distributable_items = total_items - (child_count - 1);
-                if (distributable_items >= child_count * child_minimum &&
-                    distributable_items <= child_count * child_maximum)
-                {
-                    break;
-                }
-
-                ++child_count;
-            }
-
-            if (child_count > maximum_children_in_node)
-            {
-                throw std::logic_error("unable to build b-star tree subtree");
-            }
-
-            size_t distributable_items = total_items - (child_count - 1);
-            std::vector<size_t> child_sizes = distribute_items(
-                distributable_items,
-                child_count,
-                child_minimum,
-                child_maximum);
-
-            size_t current = begin;
-            for (size_t i = 0; i < child_count; ++i)
-            {
-                size_t child_end = current + child_sizes[i];
-                node->_pointers.push_back(build_subtree_from_range(current, child_end, height - 1));
-                current = child_end;
-
-                if (i + 1 < child_count)
-                {
-                    node->_keys.push_back(_entries[current]);
-                    ++current;
-                }
+                clone->_pointers.push_back(clone_subtree(child));
             }
         }
         catch (...)
         {
-            free_subtree(node);
+            free_subtree(clone);
             throw;
         }
 
-        return node;
-    }
-
-    void rebuild_tree(bool prefer_compact_root = false)
-    {
-        free_subtree(_root);
-        _root = nullptr;
-
-        if (_entries.empty())
-        {
-            return;
-        }
-
-        size_t height = 0;
-        if (!prefer_compact_root || _entries.size() > maximum_keys_in_node + 1)
-        {
-            while (_entries.size() > maximum_items_in_subtree(height))
-            {
-                ++height;
-            }
-        }
-
-        _root = build_subtree_from_range(0, _entries.size(), height);
+        return clone;
     }
 
     template<typename path_type>
@@ -506,6 +343,368 @@ private:
         return path;
     }
 
+    void split_root_overflowed_node()
+    {
+        bstree_node* old_root = _root;
+        bstree_node* right = allocate_node();
+        const size_t middle_index = old_root->_keys.size() / 2;
+        tree_data_type promoted = std::move(old_root->_keys[middle_index]);
+
+        for (size_t i = middle_index + 1; i < old_root->_keys.size(); ++i)
+        {
+            right->_keys.push_back(std::move(old_root->_keys[i]));
+        }
+
+        if (!old_root->is_leaf())
+        {
+            for (size_t i = middle_index + 1; i < old_root->_pointers.size(); ++i)
+            {
+                right->_pointers.push_back(old_root->_pointers[i]);
+            }
+            old_root->_pointers.resize(middle_index + 1);
+        }
+
+        old_root->_keys.resize(middle_index);
+
+        bstree_node* new_root = allocate_node();
+        new_root->_keys.push_back(std::move(promoted));
+        new_root->_pointers.push_back(old_root);
+        new_root->_pointers.push_back(right);
+        _root = new_root;
+    }
+
+    void redistribute_children_pair(bstree_node* parent, size_t left_child_index)
+    {
+        bstree_node* left = parent->_pointers[left_child_index];
+        bstree_node* right = parent->_pointers[left_child_index + 1];
+
+        std::vector<tree_data_type> all_keys;
+        all_keys.reserve(left->_keys.size() + 1 + right->_keys.size());
+        std::move(left->_keys.begin(), left->_keys.end(), std::back_inserter(all_keys));
+        all_keys.push_back(std::move(parent->_keys[left_child_index]));
+        std::move(right->_keys.begin(), right->_keys.end(), std::back_inserter(all_keys));
+
+        std::vector<bstree_node*> all_pointers;
+        if (!left->is_leaf())
+        {
+            all_pointers.reserve(left->_pointers.size() + right->_pointers.size());
+            all_pointers.insert(all_pointers.end(), left->_pointers.begin(), left->_pointers.end());
+            all_pointers.insert(all_pointers.end(), right->_pointers.begin(), right->_pointers.end());
+        }
+
+        const size_t left_keys_count = all_keys.size() / 2;
+
+        left->_keys.assign(
+                std::make_move_iterator(all_keys.begin()),
+                std::make_move_iterator(all_keys.begin() + static_cast<ptrdiff_t>(left_keys_count)));
+        parent->_keys[left_child_index] = std::move(all_keys[left_keys_count]);
+        right->_keys.assign(
+                std::make_move_iterator(all_keys.begin() + static_cast<ptrdiff_t>(left_keys_count + 1)),
+                std::make_move_iterator(all_keys.end()));
+
+        if (!all_pointers.empty())
+        {
+            left->_pointers.assign(
+                    all_pointers.begin(),
+                    all_pointers.begin() + static_cast<ptrdiff_t>(left_keys_count + 1));
+            right->_pointers.assign(
+                    all_pointers.begin() + static_cast<ptrdiff_t>(left_keys_count + 1),
+                    all_pointers.end());
+        }
+    }
+
+    void split_children_into_three(bstree_node* parent, size_t left_child_index)
+    {
+        bstree_node* left = parent->_pointers[left_child_index];
+        bstree_node* right = parent->_pointers[left_child_index + 1];
+        bstree_node* middle = allocate_node();
+
+        std::vector<tree_data_type> all_keys;
+        all_keys.reserve(left->_keys.size() + 1 + right->_keys.size());
+        std::move(left->_keys.begin(), left->_keys.end(), std::back_inserter(all_keys));
+        all_keys.push_back(std::move(parent->_keys[left_child_index]));
+        std::move(right->_keys.begin(), right->_keys.end(), std::back_inserter(all_keys));
+
+        std::vector<bstree_node*> all_pointers;
+        if (!left->is_leaf())
+        {
+            all_pointers.reserve(left->_pointers.size() + right->_pointers.size());
+            all_pointers.insert(all_pointers.end(), left->_pointers.begin(), left->_pointers.end());
+            all_pointers.insert(all_pointers.end(), right->_pointers.begin(), right->_pointers.end());
+        }
+
+        const size_t left_keys_count = minimum_keys_in_node;
+        const size_t middle_keys_count = minimum_keys_in_node;
+        const size_t second_separator_index = left_keys_count + 1 + middle_keys_count;
+
+        left->_keys.assign(
+                std::make_move_iterator(all_keys.begin()),
+                std::make_move_iterator(all_keys.begin() + static_cast<ptrdiff_t>(left_keys_count)));
+        tree_data_type first_separator = std::move(all_keys[left_keys_count]);
+        middle->_keys.assign(
+                std::make_move_iterator(all_keys.begin() + static_cast<ptrdiff_t>(left_keys_count + 1)),
+                std::make_move_iterator(all_keys.begin() + static_cast<ptrdiff_t>(second_separator_index)));
+        tree_data_type second_separator = std::move(all_keys[second_separator_index]);
+        right->_keys.assign(
+                std::make_move_iterator(all_keys.begin() + static_cast<ptrdiff_t>(second_separator_index + 1)),
+                std::make_move_iterator(all_keys.end()));
+
+        if (!all_pointers.empty())
+        {
+            left->_pointers.assign(
+                    all_pointers.begin(),
+                    all_pointers.begin() + static_cast<ptrdiff_t>(left_keys_count + 1));
+            middle->_pointers.assign(
+                    all_pointers.begin() + static_cast<ptrdiff_t>(left_keys_count + 1),
+                    all_pointers.begin() + static_cast<ptrdiff_t>(left_keys_count + 1 + middle_keys_count + 1));
+            right->_pointers.assign(
+                    all_pointers.begin() + static_cast<ptrdiff_t>(left_keys_count + 1 + middle_keys_count + 1),
+                    all_pointers.end());
+        }
+
+        parent->_keys[left_child_index] = std::move(first_separator);
+        parent->_keys.insert(
+                parent->_keys.begin() + static_cast<ptrdiff_t>(left_child_index + 1),
+                std::move(second_separator));
+        parent->_pointers.insert(
+                parent->_pointers.begin() + static_cast<ptrdiff_t>(left_child_index + 1),
+                middle);
+    }
+
+    void handle_child_overflow_after_insert(bstree_node* parent, size_t child_index)
+    {
+        bstree_node* child = parent->_pointers[child_index];
+        if (child->_keys.size() <= maximum_keys_in_node)
+        {
+            return;
+        }
+
+        if (child_index + 1 < parent->_pointers.size() &&
+            parent->_pointers[child_index + 1]->_keys.size() < maximum_keys_in_node)
+        {
+            redistribute_children_pair(parent, child_index);
+            return;
+        }
+
+        if (child_index > 0 &&
+            parent->_pointers[child_index - 1]->_keys.size() < maximum_keys_in_node)
+        {
+            redistribute_children_pair(parent, child_index - 1);
+            return;
+        }
+
+        if (child_index + 1 < parent->_pointers.size())
+        {
+            split_children_into_three(parent, child_index);
+            return;
+        }
+
+        split_children_into_three(parent, child_index - 1);
+    }
+
+    bool insert_with_local_rebalance(bstree_node* node, tree_data_type&& data)
+    {
+        const size_t index = find_key_index(node, data.first);
+
+        if (node->is_leaf())
+        {
+            node->_keys.insert(node->_keys.begin() + static_cast<ptrdiff_t>(index), std::move(data));
+            return node->_keys.size() > maximum_keys_in_node;
+        }
+
+        if (insert_with_local_rebalance(node->_pointers[index], std::move(data)))
+        {
+            handle_child_overflow_after_insert(node, index);
+        }
+
+        return node->_keys.size() > maximum_keys_in_node;
+    }
+
+    tree_data_type largest_pair_in_subtree(const bstree_node* node) const
+    {
+        const bstree_node* current = node;
+        while (!current->is_leaf())
+        {
+            current = current->_pointers.back();
+        }
+
+        return current->_keys.back();
+    }
+
+    tree_data_type smallest_pair_in_subtree(const bstree_node* node) const
+    {
+        const bstree_node* current = node;
+        while (!current->is_leaf())
+        {
+            current = current->_pointers.front();
+        }
+
+        return current->_keys.front();
+    }
+
+    void merge_child_nodes(bstree_node* parent, size_t left_child_index)
+    {
+        bstree_node* left = parent->_pointers[left_child_index];
+        bstree_node* right = parent->_pointers[left_child_index + 1];
+
+        left->_keys.push_back(std::move(parent->_keys[left_child_index]));
+        for (tree_data_type& item : right->_keys)
+        {
+            left->_keys.push_back(std::move(item));
+        }
+
+        for (bstree_node* child : right->_pointers)
+        {
+            left->_pointers.push_back(child);
+        }
+
+        parent->_keys.erase(parent->_keys.begin() + static_cast<ptrdiff_t>(left_child_index));
+        parent->_pointers.erase(parent->_pointers.begin() + static_cast<ptrdiff_t>(left_child_index + 1));
+        free_node(right);
+    }
+
+    void merge_three_children_into_two(bstree_node* parent, size_t left_child_index)
+    {
+        bstree_node* left = parent->_pointers[left_child_index];
+        bstree_node* middle = parent->_pointers[left_child_index + 1];
+        bstree_node* right = parent->_pointers[left_child_index + 2];
+        std::vector<tree_data_type> all_keys;
+        all_keys.reserve(left->_keys.size() + middle->_keys.size() + right->_keys.size() + 2);
+        std::move(left->_keys.begin(), left->_keys.end(), std::back_inserter(all_keys));
+        all_keys.push_back(std::move(parent->_keys[left_child_index]));
+        std::move(middle->_keys.begin(), middle->_keys.end(), std::back_inserter(all_keys));
+        all_keys.push_back(std::move(parent->_keys[left_child_index + 1]));
+        std::move(right->_keys.begin(), right->_keys.end(), std::back_inserter(all_keys));
+
+        std::vector<bstree_node*> all_pointers;
+        if (!left->is_leaf())
+        {
+            all_pointers.reserve(left->_pointers.size() + middle->_pointers.size() + right->_pointers.size());
+            all_pointers.insert(all_pointers.end(), left->_pointers.begin(), left->_pointers.end());
+            all_pointers.insert(all_pointers.end(), middle->_pointers.begin(), middle->_pointers.end());
+            all_pointers.insert(all_pointers.end(), right->_pointers.begin(), right->_pointers.end());
+        }
+
+        const size_t left_keys_count = all_keys.size() / 2;
+
+        left->_keys.assign(
+                std::make_move_iterator(all_keys.begin()),
+                std::make_move_iterator(all_keys.begin() + static_cast<ptrdiff_t>(left_keys_count)));
+        parent->_keys[left_child_index] = std::move(all_keys[left_keys_count]);
+        right->_keys.assign(
+                std::make_move_iterator(all_keys.begin() + static_cast<ptrdiff_t>(left_keys_count + 1)),
+                std::make_move_iterator(all_keys.end()));
+
+        if (!all_pointers.empty())
+        {
+            left->_pointers.assign(
+                    all_pointers.begin(),
+                    all_pointers.begin() + static_cast<ptrdiff_t>(left_keys_count + 1));
+            right->_pointers.assign(
+                    all_pointers.begin() + static_cast<ptrdiff_t>(left_keys_count + 1),
+                    all_pointers.end());
+        }
+
+        parent->_keys.erase(parent->_keys.begin() + static_cast<ptrdiff_t>(left_child_index + 1));
+        parent->_pointers.erase(parent->_pointers.begin() + static_cast<ptrdiff_t>(left_child_index + 1));
+        free_node(middle);
+    }
+
+    void prepare_child_for_erase(bstree_node* parent, size_t child_index)
+    {
+        if (child_index > 0 && parent->_pointers[child_index - 1]->_keys.size() > minimum_keys_in_node)
+        {
+            redistribute_children_pair(parent, child_index - 1);
+            return;
+        }
+
+        if (child_index + 1 < parent->_pointers.size() && parent->_pointers[child_index + 1]->_keys.size() > minimum_keys_in_node)
+        {
+            redistribute_children_pair(parent, child_index);
+            return;
+        }
+
+        if (child_index + 2 < parent->_pointers.size())
+        {
+            merge_three_children_into_two(parent, child_index);
+            return;
+        }
+
+        if (child_index >= 2)
+        {
+            merge_three_children_into_two(parent, child_index - 2);
+            return;
+        }
+
+        if (child_index + 1 < parent->_pointers.size())
+        {
+            merge_child_nodes(parent, child_index);
+        }
+        else
+        {
+            merge_child_nodes(parent, child_index - 1);
+        }
+    }
+
+    void prepare_children_around_key_for_erase(bstree_node* parent, size_t key_index)
+    {
+        if (key_index + 2 < parent->_pointers.size())
+        {
+            merge_three_children_into_two(parent, key_index);
+            return;
+        }
+
+        if (key_index >= 1)
+        {
+            merge_three_children_into_two(parent, key_index - 1);
+            return;
+        }
+
+        merge_child_nodes(parent, key_index);
+    }
+
+    bool erase_key_from_node(bstree_node* node, const tkey& key)
+    {
+        size_t index = find_key_index(node, key);
+
+        if (index < node->_keys.size() && key_equal(node->_keys[index].first, key))
+        {
+            if (node->is_leaf())
+            {
+                node->_keys.erase(node->_keys.begin() + static_cast<ptrdiff_t>(index));
+                return true;
+            }
+
+            if (node->_pointers[index]->_keys.size() > minimum_keys_in_node)
+            {
+                node->_keys[index] = largest_pair_in_subtree(node->_pointers[index]);
+                return erase_key_from_node(node->_pointers[index], node->_keys[index].first);
+            }
+
+            if (node->_pointers[index + 1]->_keys.size() > minimum_keys_in_node)
+            {
+                node->_keys[index] = smallest_pair_in_subtree(node->_pointers[index + 1]);
+                return erase_key_from_node(node->_pointers[index + 1], node->_keys[index].first);
+            }
+
+            prepare_children_around_key_for_erase(node, index);
+            return erase_key_from_node(node, key);
+        }
+
+        if (node->is_leaf())
+        {
+            return false;
+        }
+
+        if (node->_pointers[index]->_keys.size() == minimum_keys_in_node)
+        {
+            prepare_child_for_erase(node, index);
+            index = find_key_index(node, key);
+        }
+
+        return erase_key_from_node(node->_pointers[index], key);
+    }
+
 public:
     class bstree_iterator;
     class bstree_reverse_iterator;
@@ -537,12 +736,12 @@ public:
 
         reference operator*() const noexcept
         {
-            return pair_as_value(*(*_path.top().first)->_keys[_index]);
+            return pair_as_value((*_path.top().first)->_keys[_index]);
         }
 
         pointer operator->() const noexcept
         {
-            return &pair_as_value(*(*_path.top().first)->_keys[_index]);
+            return &pair_as_value((*_path.top().first)->_keys[_index]);
         }
 
         self& operator++()
@@ -644,12 +843,12 @@ public:
 
         reference operator*() const noexcept
         {
-            return pair_as_value(*(*_path.top().first)->_keys[_index]);
+            return pair_as_value((*_path.top().first)->_keys[_index]);
         }
 
         pointer operator->() const noexcept
         {
-            return &pair_as_value(*(*_path.top().first)->_keys[_index]);
+            return &pair_as_value((*_path.top().first)->_keys[_index]);
         }
 
         self& operator++()
@@ -928,7 +1127,7 @@ public:
     };
 
     explicit BS_tree(const compare& cmp = compare(), pp_allocator<value_type> alloc = pp_allocator<value_type>())
-        : compare(cmp), _allocator(alloc), _root(nullptr)
+        : compare(cmp), _allocator(alloc), _root(nullptr), _size(0)
     {
     }
 
@@ -957,32 +1156,22 @@ public:
     }
 
     BS_tree(const BS_tree& other)
-        : compare(static_cast<const compare&>(other)), _allocator(other._allocator), _root(nullptr)
+        : compare(static_cast<const compare&>(other)),
+          _allocator(other._allocator.select_on_container_copy_construction()),
+          _root(nullptr),
+          _size(other._size)
     {
-        try
-        {
-            _entries.reserve(other._entries.size());
-            for (const tree_data_type* entry : other._entries)
-            {
-                _entries.push_back(allocate_entry(*entry));
-            }
-            rebuild_tree(false);
-        }
-        catch (...)
-        {
-            clear();
-            throw;
-        }
+        _root = clone_subtree(other._root);
     }
 
     BS_tree(BS_tree&& other) noexcept
         : compare(std::move(static_cast<compare&>(other))),
-          _allocator(std::move(other._allocator)),
+          _allocator(other._allocator),
           _root(other._root),
-          _entries(std::move(other._entries))
+          _size(other._size)
     {
         other._root = nullptr;
-        other._entries.clear();
+        other._size = 0;
     }
 
     BS_tree& operator=(const BS_tree& other)
@@ -1006,11 +1195,11 @@ public:
 
         clear();
         static_cast<compare&>(*this) = std::move(static_cast<compare&>(other));
-        _allocator = std::move(other._allocator);
+        _allocator = other._allocator;
         _root = other._root;
-        _entries = std::move(other._entries);
+        _size = other._size;
         other._root = nullptr;
-        other._entries.clear();
+        other._size = 0;
         return *this;
     }
 
@@ -1021,48 +1210,52 @@ public:
 
     tvalue& at(const tkey& key)
     {
-        tree_data_type* entry = find_entry(key);
-        if (entry == nullptr)
+        auto it = find(key);
+        if (it == end())
         {
             throw std::out_of_range("key not found");
         }
-
-        return entry->second;
+        return it->second;
     }
 
     const tvalue& at(const tkey& key) const
     {
-        const tree_data_type* entry = find_entry(key);
-        if (entry == nullptr)
+        auto it = find(key);
+        if (it == cend())
         {
             throw std::out_of_range("key not found");
         }
-
-        return entry->second;
+        return it->second;
     }
 
     tvalue& operator[](const tkey& key)
     {
-        auto [it, inserted] = emplace(key, tvalue());
-        (void) inserted;
-        return it->second;
+        return emplace(key, tvalue()).first->second;
     }
 
     tvalue& operator[](tkey&& key)
     {
-        auto [it, inserted] = emplace(std::move(key), tvalue());
-        (void) inserted;
-        return it->second;
+        return emplace(std::move(key), tvalue()).first->second;
     }
 
     bstree_iterator begin()
     {
-        return _root == nullptr ? end() : bstree_iterator(build_begin_path(), 0);
+        if (_root == nullptr)
+        {
+            return end();
+        }
+        return bstree_iterator(build_begin_path(), 0);
     }
 
     bstree_iterator end()
     {
-        return _root == nullptr ? bstree_iterator() : bstree_iterator(build_end_path(), _root->_keys.size());
+        if (_root == nullptr)
+        {
+            return bstree_iterator();
+        }
+
+        auto path = build_end_path();
+        return bstree_iterator(path, (*path.top().first)->_keys.size());
     }
 
     bstree_const_iterator begin() const
@@ -1077,12 +1270,22 @@ public:
 
     bstree_const_iterator cbegin() const
     {
-        return _root == nullptr ? cend() : bstree_const_iterator(build_begin_path(), 0);
+        if (_root == nullptr)
+        {
+            return cend();
+        }
+        return bstree_const_iterator(build_begin_path(), 0);
     }
 
     bstree_const_iterator cend() const
     {
-        return _root == nullptr ? bstree_const_iterator() : bstree_const_iterator(build_end_path(), _root->_keys.size());
+        if (_root == nullptr)
+        {
+            return bstree_const_iterator();
+        }
+
+        auto path = build_end_path();
+        return bstree_const_iterator(path, (*path.top().first)->_keys.size());
     }
 
     bstree_reverse_iterator rbegin()
@@ -1107,30 +1310,51 @@ public:
 
     bstree_const_reverse_iterator crbegin() const
     {
-        return bstree_const_reverse_iterator(cend());
+        return rbegin();
     }
 
     bstree_const_reverse_iterator crend() const
     {
-        return bstree_const_reverse_iterator(cbegin());
+        return rend();
     }
 
     size_t size() const noexcept
     {
-        return _entries.size();
+        return _size;
     }
 
     bool empty() const noexcept
     {
-        return _entries.empty();
+        return _size == 0;
     }
 
     bstree_iterator find(const tkey& key)
     {
-        auto it = lower_bound(key);
-        if (it != end() && key_equal(it->first, key))
+        if (_root == nullptr)
         {
-            return it;
+            return end();
+        }
+
+        iterator_path path;
+        bstree_node** slot = &_root;
+        path.push({slot, 0});
+
+        while (*slot != nullptr)
+        {
+            bstree_node* node = *slot;
+            size_t index = find_key_index(node, key);
+            if (index < node->_keys.size() && key_equal(node->_keys[index].first, key))
+            {
+                return bstree_iterator(path, index);
+            }
+
+            if (node->is_leaf())
+            {
+                return end();
+            }
+
+            slot = &node->_pointers[index];
+            path.push({slot, index});
         }
 
         return end();
@@ -1138,10 +1362,31 @@ public:
 
     bstree_const_iterator find(const tkey& key) const
     {
-        auto it = lower_bound(key);
-        if (it != cend() && key_equal(it->first, key))
+        if (_root == nullptr)
         {
-            return it;
+            return cend();
+        }
+
+        const_iterator_path path;
+        auto slot = reinterpret_cast<bstree_node* const*>(&_root);
+        path.push({slot, 0});
+
+        while (*slot != nullptr)
+        {
+            bstree_node* node = *slot;
+            size_t index = find_key_index(node, key);
+            if (index < node->_keys.size() && key_equal(node->_keys[index].first, key))
+            {
+                return bstree_const_iterator(path, index);
+            }
+
+            if (node->is_leaf())
+            {
+                return cend();
+            }
+
+            slot = &node->_pointers[index];
+            path.push({slot, index});
         }
 
         return cend();
@@ -1149,72 +1394,62 @@ public:
 
     bstree_iterator lower_bound(const tkey& key)
     {
-        for (auto it = begin(); it != end(); ++it)
+        for (auto it = begin(), last = end(); it != last; ++it)
         {
             if (!key_less(it->first, key))
             {
                 return it;
             }
         }
-
         return end();
     }
 
     bstree_const_iterator lower_bound(const tkey& key) const
     {
-        for (auto it = cbegin(); it != cend(); ++it)
+        for (auto it = cbegin(), last = cend(); it != last; ++it)
         {
             if (!key_less(it->first, key))
             {
                 return it;
             }
         }
-
         return cend();
     }
 
     bstree_iterator upper_bound(const tkey& key)
     {
-        for (auto it = begin(); it != end(); ++it)
+        for (auto it = begin(), last = end(); it != last; ++it)
         {
             if (key_less(key, it->first))
             {
                 return it;
             }
         }
-
         return end();
     }
 
     bstree_const_iterator upper_bound(const tkey& key) const
     {
-        for (auto it = cbegin(); it != cend(); ++it)
+        for (auto it = cbegin(), last = cend(); it != last; ++it)
         {
             if (key_less(key, it->first))
             {
                 return it;
             }
         }
-
         return cend();
     }
 
     bool contains(const tkey& key) const
     {
-        return find_entry(key) != nullptr;
+        return find(key) != cend();
     }
 
     void clear() noexcept
     {
         free_subtree(_root);
         _root = nullptr;
-
-        for (tree_data_type* entry : _entries)
-        {
-            free_entry(entry);
-        }
-
-        _entries.clear();
+        _size = 0;
     }
 
     std::pair<bstree_iterator, bool> insert(const tree_data_type& data)
@@ -1231,25 +1466,28 @@ public:
     std::pair<bstree_iterator, bool> emplace(Args&&... args)
     {
         tree_data_type data(std::forward<Args>(args)...);
-        size_t index = find_index(data.first);
-        if (index < _entries.size() && key_equal(_entries[index]->first, data.first))
+        tkey inserted_key = data.first;
+
+        if (auto it = find(inserted_key); it != end())
         {
-            return {find(data.first), false};
+            return {it, false};
         }
 
-        tree_data_type* entry = allocate_entry(std::move(data));
-        try
+        if (_root == nullptr)
         {
-            _entries.insert(_entries.begin() + static_cast<ptrdiff_t>(index), entry);
-            rebuild_tree(false);
-        }
-        catch (...)
-        {
-            free_entry(entry);
-            throw;
+            _root = allocate_node();
+            _root->_keys.push_back(std::move(data));
+            ++_size;
+            return {begin(), true};
         }
 
-        return {find(entry->first), true};
+        if (insert_with_local_rebalance(_root, std::move(data)))
+        {
+            split_root_overflowed_node();
+        }
+
+        ++_size;
+        return {find(inserted_key), true};
     }
 
     bstree_iterator insert_or_assign(const tree_data_type& data)
@@ -1266,27 +1504,12 @@ public:
     bstree_iterator emplace_or_assign(Args&&... args)
     {
         tree_data_type data(std::forward<Args>(args)...);
-        size_t index = find_index(data.first);
-        if (index < _entries.size() && key_equal(_entries[index]->first, data.first))
+        if (auto it = find(data.first); it != end())
         {
-            _entries[index]->second = std::move(data.second);
-            rebuild_tree(false);
-            return find(_entries[index]->first);
+            it->second = std::move(data.second);
+            return it;
         }
-
-        tree_data_type* entry = allocate_entry(std::move(data));
-        try
-        {
-            _entries.insert(_entries.begin() + static_cast<ptrdiff_t>(index), entry);
-            rebuild_tree();
-        }
-        catch (...)
-        {
-            free_entry(entry);
-            throw;
-        }
-
-        return find(entry->first);
+        return emplace(std::move(data)).first;
     }
 
     bstree_iterator erase(bstree_iterator pos)
@@ -1304,7 +1527,6 @@ public:
         {
             return end();
         }
-
         return find(next->first);
     }
 
@@ -1323,7 +1545,6 @@ public:
         {
             return end();
         }
-
         return find(next->first);
     }
 
@@ -1333,7 +1554,6 @@ public:
         {
             beg = erase(beg);
         }
-
         return en;
     }
 
@@ -1348,31 +1568,46 @@ public:
         {
             return end();
         }
-
         return find(en->first);
     }
 
     bstree_iterator erase(const tkey& key)
     {
-        size_t index = find_index(key);
-        if (index >= _entries.size() || !key_equal(_entries[index]->first, key))
+        auto current = find(key);
+        if (_root == nullptr || current == end())
         {
             return end();
         }
 
-        tkey next_key = key;
-        bool has_next = index + 1 < _entries.size();
-        if (has_next)
+        auto next = current;
+        ++next;
+
+        if (!erase_key_from_node(_root, key))
         {
-            next_key = _entries[index + 1]->first;
+            return end();
         }
 
-        tree_data_type* entry = _entries[index];
-        _entries.erase(_entries.begin() + static_cast<ptrdiff_t>(index));
-        free_entry(entry);
-        rebuild_tree(true);
+        --_size;
+        if (_root->_keys.empty())
+        {
+            bstree_node* old_root = _root;
+            if (_root->is_leaf())
+            {
+                _root = nullptr;
+            }
+            else
+            {
+                _root = _root->_pointers.front();
+                old_root->_pointers.clear();
+            }
+            free_node(old_root);
+        }
 
-        return has_next ? find(next_key) : end();
+        if (next == end())
+        {
+            return end();
+        }
+        return find(next->first);
     }
 };
 

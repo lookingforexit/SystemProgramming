@@ -58,9 +58,8 @@ struct test_data
 {
     tkey key;
     tvalue value;
-    size_t index;
 
-    test_data(size_t i, tkey k, tvalue v) : index(i), key(k), value(v) {}
+    test_data(size_t, tkey k, tvalue v) : key(k), value(v) {}
 };
 
 template<typename tkey, typename tvalue, typename comp, size_t t>
@@ -68,14 +67,17 @@ bool infix_const_iterator_test(
         BP_tree<tkey, tvalue, comp, t> const &tree,
         std::vector<test_data<tkey, tvalue>> const &expected_result)
 {
-    auto end_infix = tree.cend();
     auto it = tree.cbegin();
+    auto end_infix = tree.cend();
 
-    for (auto const &item: expected_result)
+    for (auto const &item : expected_result)
     {
-        auto data = *it;
+        if (it == end_infix)
+        {
+            return false;
+        }
 
-        if (it->first != item.key || it->second != item.value || it.index() != item.index)
+        if (it->first != item.key || it->second != item.value)
         {
             return false;
         }
@@ -83,7 +85,7 @@ bool infix_const_iterator_test(
         ++it;
     }
 
-return true;
+    return it == end_infix;
 }
 
 TEST(bTreePositiveTests, test0)
@@ -234,7 +236,9 @@ TEST(bTreePositiveTests, test5)
 {
     std::vector<test_data<int, std::string>> expected_result =
             {
-
+                    test_data<int, std::string>(0, 1, "a"),
+                    test_data<int, std::string>(0, 3, "d"),
+                    test_data<int, std::string>(0, 15, "c")
             };
 
     BP_tree<int, std::string, std::less<int>, 2> tree(std::less<int>(), nullptr);

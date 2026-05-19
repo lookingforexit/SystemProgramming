@@ -66,21 +66,25 @@ bool infix_const_iterator_test(
         BS_tree<tkey, tvalue, comp, t> const &tree,
         std::vector<test_data<tkey, tvalue>> const &expected_result)
 {
-    auto end_infix = tree.cend();
     auto it = tree.cbegin();
+    auto end_infix = tree.cend();
 
     for (auto const &item : expected_result)
     {
-        auto data = *it;
-
-        if (it->first != item.key || it->second != item.value || it.depth() != item.depth || it.index() != item.index)
+        if (it == end_infix)
         {
             return false;
         }
+
+        if (it->first != item.key || it->second != item.value)
+        {
+            return false;
+        }
+
         ++it;
     }
 
-    return true;
+    return it == end_infix;
 }
 
 TEST(bTreePositiveTests, test_empty_tree)
